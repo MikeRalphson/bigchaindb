@@ -1,79 +1,94 @@
 import time
 import pytest
 import rethinkdb as r
-from bigchaindb import exceptions
 
+from bigchaindb import Bigchain
 
 @pytest.fixture
-def inputs(b, user_vk):
-    # 1. create transactions for `USER` to spend
-    for i in range(40):
-        tx = b.create_transaction(b.me, user_vk, None, 'CREATE')
-        tx_signed = b.sign_transaction(tx, b.me_private)
-        b.write_transaction(tx_signed)
-    time.sleep(2)
+def inputs(user_vk):
+    from bigchaindb.models import Transaction
+
+    b = Bigchain()
+
+    # 1. create blocks with transactions for `USER` to spend
+    prev_block_id = b.get_last_voted_block().id
+    for block in range(4):
+        transactions = [
+            Transaction.create(
+                [b.me], [user_vk], payload={'i': i}).sign([b.me_private])
+            for i in range(10)
+        ]
+        block = b.create_block(transactions)
+        b.write_block(block, durability='hard')
+
+        # 2. vote the blocks valid, so that the inputs are valid
+        vote = b.vote(block.id, prev_block_id, True)
+        prev_block_id = block.id
+        b.write_vote(vote)
 
 
 @pytest.mark.usefixtures('processes')
 def test_fast_double_create(b, user_vk):
-    tx = b.create_transaction(b.me, user_vk, None, 'CREATE')
-    tx = b.sign_transaction(tx, b.me_private)
+    from bigchaindb.models import Transaction
+    tx = Transaction.create([b.me], [user_vk],
+                            payload={'test': 'test'}).sign([b.me_private])
 
     # write everything fast
     b.write_transaction(tx)
     b.write_transaction(tx)
 
     time.sleep(2)
-    tx_returned = b.get_transaction(tx['id'])
+    tx_returned = b.get_transaction(tx.id)
 
     # test that the tx can be queried
     assert tx_returned == tx
     # test the transaction appears only once
     assert len(list(r.table('bigchain')
-                    .get_all(tx['id'], index='transaction_id')
+                    .get_all(tx.id, index='transaction_id')
                     .run(b.conn))) == 1
 
 
 @pytest.mark.usefixtures('processes')
 def test_double_create(b, user_vk):
-    tx = b.create_transaction(b.me, user_vk, None, 'CREATE')
-    tx = b.sign_transaction(tx, b.me_private)
+    from bigchaindb.models import Transaction
+    tx = Transaction.create([b.me], [user_vk],
+                            payload={'test': 'test'}).sign([b.me_private])
 
     b.write_transaction(tx)
     time.sleep(2)
     b.write_transaction(tx)
     time.sleep(2)
-    tx_returned = b.get_transaction(tx['id'])
+    tx_returned = b.get_transaction(tx.id)
 
     # test that the tx can be queried
     assert tx_returned == tx
     # test the transaction appears only once
     assert len(list(r.table('bigchain')
-                    .get_all(tx['id'], index='transaction_id')
+                    .get_all(tx.id, index='transaction_id')
                     .run(b.conn))) == 1
 
 
 @pytest.mark.usefixtures('processes', 'inputs')
 def test_get_owned_ids_works_after_double_spend(b, user_vk, user_sk):
     """See issue 633."""
+    from bigchaindb.models import Transaction
     input_valid = b.get_owned_ids(user_vk).pop()
-    tx_valid = b.create_transaction(user_vk, user_vk, input_valid, 'TRANSFER')
-    tx_valid_signed = b.sign_transaction(tx_valid, user_sk)
+    tx_valid = Transaction.transfer(input_valid.to_inputs(),
+                                    [user_vk]).sign([user_sk])
 
     # write the valid tx and wait for voting/block to catch up
-    b.write_transaction(tx_valid_signed)
+    b.write_transaction(tx_valid)
     time.sleep(2)
 
     # doesn't throw an exception
     b.get_owned_ids(user_vk)
 
     # create another transaction with the same input
-    tx_double_spend = b.create_transaction(user_vk, user_vk,
-                                           input_valid, 'TRANSFER')
-    tx_double_spend_signed = b.sign_transaction(tx_double_spend, user_sk)
+    tx_double_spend = Transaction.transfer(input_valid.to_inputs(),
+                                           [user_vk]).sign([user_sk])
 
     # write the double spend tx
-    b.write_transaction(tx_double_spend_signed)
+    b.write_transaction(tx_double_spend)
     time.sleep(2)
 
     # still doesn't throw an exception
