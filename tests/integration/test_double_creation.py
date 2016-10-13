@@ -15,7 +15,7 @@ def inputs(user_vk):
     for block in range(4):
         transactions = [
             Transaction.create(
-                [b.me], [user_vk], payload={'i': i}).sign([b.me_private])
+                [b.me], [user_vk], metadata={'i': i}).sign([b.me_private])
             for i in range(10)
         ]
         block = b.create_block(transactions)
@@ -26,7 +26,7 @@ def inputs(user_vk):
 def test_fast_double_create(b, user_vk):
     from bigchaindb.models import Transaction
     tx = Transaction.create([b.me], [user_vk],
-                            payload={'test': 'test'}).sign([b.me_private])
+                            metadata={'test': 'test'}).sign([b.me_private])
 
     # write everything fast
     b.write_transaction(tx)
@@ -47,7 +47,7 @@ def test_fast_double_create(b, user_vk):
 def test_double_create(b, user_vk):
     from bigchaindb.models import Transaction
     tx = Transaction.create([b.me], [user_vk],
-                            payload={'test': 'test'}).sign([b.me_private])
+                            metadata={'test': 'test'}).sign([b.me_private])
 
     b.write_transaction(tx)
     time.sleep(2)
@@ -70,7 +70,8 @@ def test_get_owned_ids_works_after_double_spend(b, user_vk, user_sk):
     input_valid = b.get_owned_ids(user_vk).pop()
     input_valid = b.get_transaction(input_valid.txid)
     tx_valid = Transaction.transfer(input_valid.to_inputs(),
-                                    [user_vk]).sign([user_sk])
+                                    [user_vk],
+                                    input_valid.asset).sign([user_sk])
 
     # write the valid tx and wait for voting/block to catch up
     b.write_transaction(tx_valid)
@@ -81,7 +82,9 @@ def test_get_owned_ids_works_after_double_spend(b, user_vk, user_sk):
 
     # create another transaction with the same input
     tx_double_spend = Transaction.transfer(input_valid.to_inputs(),
-                                           [user_vk]).sign([user_sk])
+                                           [user_vk],
+                                           input_valid.asset) \
+                                           .sign([user_sk])
 
     # write the double spend tx
     b.write_transaction(tx_double_spend)
